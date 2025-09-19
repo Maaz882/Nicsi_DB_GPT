@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pydantic
+typing-extensions
+langchain
+langchain-core
+langchain-community
+llama-cpp-python
+sqlalchemy
+pymysql
+psycopg2-binary
