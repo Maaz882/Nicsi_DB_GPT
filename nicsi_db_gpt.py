@@ -12,6 +12,7 @@ from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_community.llms import LlamaCpp
 from langchain_community.tools import QuerySQLDatabaseTool
 from langchain.memory import ConversationBufferMemory
+import uuid
 import logging
 
 # Configure logging
@@ -45,6 +46,17 @@ class DatabaseConfig(BaseModel):
     db_port: Optional[int] = Field(default=None, description="Database port (optional)")
     db_name: str = Field(..., description="Database name or file path for SQLite")
     table_names: List[str] = Field(..., description="List of table names to include")
+
+
+class ReConfigDB(BaseModel):
+    db_type: str = Field(..., description="Database type: mysql, postgresql, sqlite, oracle, mssql")
+    db_user: str = Field(default="", description="Database username (not required for SQLite)")
+    db_password: str = Field(default="", description="Database password (not required for SQLite)")
+    db_host: str = Field(default="localhost", description="Database host (not required for SQLite)")
+    db_port: Optional[int] = Field(default=None, description="Database port (optional)")
+    db_name: str = Field(..., description="Database name or file path for SQLite")
+    table_names: List[str] = Field(..., description="List of table names to include")
+    session_id: str = Field(..., description="Session ID to reconnect")
     
 class QuestionRequest(BaseModel):
     session_id: str
@@ -161,7 +173,7 @@ Conversation so far:
 
 Schema:
 {{table_info}}
-
+x
 Question: {{input}}
 """
     )
@@ -199,7 +211,7 @@ def extract_sql(text: str) -> str:
 async def connect_database(config: DatabaseConfig):
     """Connect to database and initialize session"""
     try:
-        session_id = f"{config.db_type}_{config.db_host}_{config.db_name}_{len(active_sessions)}"
+        session_id = f"{config.db_type}_{config.db_host}_{config.db_name}_{len(active_sessions)}_{uuid.uuid4()}"
         
         # Create database connection URI based on database type
         db_uri = create_database_uri(config)
@@ -234,6 +246,53 @@ async def connect_database(config: DatabaseConfig):
     except Exception as e:
         logger.error(f"Database connection error: {e}")
         raise HTTPException(status_code=400, detail=f"Database connection failed: {str(e)}")
+    
+
+
+
+
+@app.post("/reconnect-database", response_model=DatabaseResponse)
+async def reconnect_database(config: ReConfigDB):
+    """Connect to database and initialize session"""
+    try:
+        session_id = config.session_id
+        
+        # Create database connection URI based on database type
+        db_uri = create_database_uri(config)
+        db = SQLDatabase.from_uri(db_uri, include_tables=config.table_names)
+        
+        # Test connection
+        table_names = db.get_usable_table_names()
+        if not table_names:
+            raise HTTPException(status_code=400, detail="No accessible tables found")
+        
+        # Initialize memory for this session
+        memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+        
+        # Store session data
+        active_sessions[session_id] = {
+            "db": db,
+            "memory": memory,
+            "table_names": table_names,
+            "db_type": config.db_type
+        }
+        
+        logger.info(f"Database connected for session {session_id}")
+        logger.info(f"Available tables: {table_names}")
+        
+        return DatabaseResponse(
+            session_id=session_id,
+            status="reconnected successfully",
+            message=f"Connected successfully. Available tables: {', '.join(table_names)}",
+            table_info=db.table_info
+        )
+        
+    except Exception as e:
+        logger.error(f"Database connection error: {e}")
+        raise HTTPException(status_code=400, detail=f"Database connection failed: {str(e)}")
+    
+
+
 
 @app.post("/ask-question", response_model=AnswerResponse)
 async def ask_question(request: QuestionRequest):
